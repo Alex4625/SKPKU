@@ -1,12 +1,56 @@
 package com.alzen.skpku
 
+import com.alzen.skpku.data.local.SkpDao
+import com.alzen.skpku.data.local.SkpEntity
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
+import javax.inject.Inject
 
-class SkpRepository(private val apiService: SupabaseApiService) {
+/**
+ * Repository class that handles data operations.
+ * Implements an Offline-First strategy by using [SkpDao] as the single source of truth for the UI.
+ */
+class SkpRepository @Inject constructor(
+    private val apiService: SupabaseApiService,
+    private val skpDao: SkpDao
+) {
 
-    suspend fun fetchSkpRecords(userKey: String) = apiService.getSkpRecords(userKey = "eq.$userKey")
+    /**
+     * Observes SKP records from the local database.
+     * The UI will automatically receive updates when the database changes.
+     */
+    fun observeSkpRecords(): Flow<List<Skp>> {
+        return skpDao.getAllSkpRecords().map { entities ->
+            entities.map { it.toDomain() }
+        }
+    }
+
+    /**
+     * Refreshes the local cache by fetching the latest data from Supabase.
+     * Uses [SkpDao.updateLocalCache] to ensure atomic updates.
+     */
+    suspend fun refreshSkpRecords(userId: String) {
+        try {
+            val response = apiService.getSkpRecords(userKey = "eq.$userId", range = "0-999")
+            if (response.isSuccessful) {
+                val records = response.body() ?: emptyList()
+                skpDao.updateLocalCache(records.map { it.toEntity() })
+            }
+        } catch (e: Exception) {
+            // Handle error (log or emit to a state)
+        }
+    }
+
+    // Existing support for pagination - can be adapted for offline-first if needed
+    suspend fun fetchSkpRecordsFromApi(userKey: String, page: Int, pageSize: Int): retrofit2.Response<List<Skp>> {
+        val start = (page - 1) * pageSize
+        val end = start + pageSize - 1
+        val range = "$start-$end"
+        return apiService.getSkpRecords(userKey = "eq.$userKey", range = range)
+    }
 
     suspend fun insertSkpRecord(skp: Skp) = apiService.insertSkpRecord(skp)
 
@@ -40,4 +84,43 @@ class SkpRepository(private val apiService: SupabaseApiService) {
         val encodedPath = URLEncoder.encode(path, "UTF-8").replace("+", "%20")
         return "${BuildConfig.SUPABASE_URL}/storage/v1/object/public/$bucket/$encodedPath"
     }
+
+    // Helper extensions to map between Entity and Domain model
+    private fun SkpEntity.toDomain() = Skp(
+        id = id,
+        userKey = userKey,
+        namaKegiatan = namaKegiatan,
+        jenisKegiatan = jenisKegiatan,
+        kategoriBidang = kategoriBidang,
+        tingkat = tingkat,
+        peran = peran,
+        modeKegiatan = modeKegiatan ?: "Tidak Ada",
+        poinSkp = poinSkp,
+        fileUrl = fileUrl,
+        fileName = fileName,
+        fileType = fileType,
+        storagePath = storagePath,
+        tanggalInput = tanggalInput,
+        timestamp = timestamp,
+        createdAt = createdAt
+    )
+
+    private fun Skp.toEntity() = SkpEntity(
+        id = id ?: "",
+        userKey = userKey,
+        namaKegiatan = namaKegiatan,
+        jenisKegiatan = jenisKegiatan,
+        kategoriBidang = kategoriBidang,
+        tingkat = tingkat,
+        peran = peran,
+        modeKegiatan = modeKegiatan,
+        poinSkp = poinSkp,
+        fileUrl = fileUrl,
+        fileName = fileName,
+        fileType = fileType,
+        storagePath = storagePath,
+        tanggalInput = tanggalInput,
+        timestamp = timestamp,
+        createdAt = createdAt
+    )
 }

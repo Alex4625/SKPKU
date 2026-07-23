@@ -1,186 +1,54 @@
 package com.alzen.skpku
 
 import android.content.Intent
-import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
-import android.view.View
 import android.webkit.MimeTypeMap
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.Spinner
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
-import com.alzen.skpku.databinding.ActivityFormSkpBinding
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.alzen.skpku.ui.screens.FormSkpScreen
+import dagger.hilt.android.AndroidEntryPoint
+import java.io.ByteArrayOutputStream
 
-class FormSkpActivity : AppCompatActivity() {
+@AndroidEntryPoint
+class FormSkpActivity : ComponentActivity() {
 
-    private lateinit var binding: ActivityFormSkpBinding
-    private val viewModel: FormSkpViewModel by viewModels { ViewModelFactory(this) }
+    private val viewModel: FormSkpViewModel by viewModels()
 
-    private var selectedKategori = ""
-    private var selectedKegiatan = ""
-    private var selectedTingkat = ""
-    private var selectedPeran = ""
-    private var selectedMode = SkpRule.MODE_TIDAK_ADA
-    private var selectedPoin = 0
-
-    private var selectedFileUri: Uri? = null
-    private var selectedFileName = ""
-    private var selectedMimeType = ""
+    private var selectedFileUri by mutableStateOf<Uri?>(null)
+    private var selectedFileName by mutableStateOf("")
+    private var selectedMimeType by mutableStateOf("")
+    private var fileBytes by mutableStateOf<ByteArray?>(null)
 
     private var isEditMode = false
     private var editSkp: Skp? = null
-    private var userKey = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityFormSkpBinding.inflate(layoutInflater)
-        setContentView(binding.root)
 
-        checkMode()
-        setupUI()
-        observeViewModel()
-    }
+        val mode = intent.getStringExtra("mode") ?: "create"
+        isEditMode = mode == "edit"
+        editSkp = intent.getSerializableExtra("skp") as? Skp
 
-    private fun checkMode() {
-        val mode = intent.getStringExtra("mode")
-        if ("edit".equals(mode, ignoreCase = true)) {
-            isEditMode = true
-            editSkp = intent.getSerializableExtra("skp") as? Skp
-            binding.tvFormTitle.text = "Edit Data SKP"
-            editSkp?.let {
-                if (!it.fileName.isNullOrEmpty()) {
-                    binding.tvFileName.text = "File saat ini: ${it.fileName}"
-                }
-            }
-        } else {
-            isEditMode = false
-            binding.tvFormTitle.text = "Tambah Data SKP"
+        setContent {
+            FormSkpScreen(
+                mode = mode,
+                editSkp = editSkp,
+                viewModel = viewModel,
+                onBack = { finish() },
+                onPickFile = { openFilePicker() },
+                selectedFileUri = selectedFileUri,
+                selectedFileName = selectedFileName,
+                selectedMimeType = selectedMimeType,
+                fileBytes = fileBytes
+            )
         }
-    }
-
-    private fun setupUI() {
-        setupKategoriSpinner()
-        setupClickActions()
-    }
-
-    private fun setupKategoriSpinner() {
-        val kategoriList = SkpRule.getKategoriList()
-        setSpinnerData(binding.spKategori, kategoriList)
-
-        binding.spKategori.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedKategori = kategoriList[position]
-                setupKegiatanSpinner()
-                if (isEditMode && editSkp != null) {
-                    setSpinnerSelection(binding.spKategori, editSkp?.kategoriBidang)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        if (isEditMode && editSkp != null) {
-            setSpinnerSelection(binding.spKategori, editSkp?.kategoriBidang)
-        }
-    }
-
-    private fun setupKegiatanSpinner() {
-        val kegiatanList = SkpRule.getKegiatanList(selectedKategori)
-        setSpinnerData(binding.spKegiatan, kegiatanList)
-
-        binding.spKegiatan.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedKegiatan = kegiatanList[position]
-                setupTingkatSpinner()
-                if (isEditMode && editSkp != null) {
-                    setSpinnerSelection(binding.spKegiatan, editSkp?.namaKegiatan)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        if (isEditMode && editSkp != null) {
-            setSpinnerSelection(binding.spKegiatan, editSkp?.namaKegiatan)
-        }
-    }
-
-    private fun setupTingkatSpinner() {
-        val tingkatList = SkpRule.getTingkatList(selectedKategori, selectedKegiatan)
-        setSpinnerData(binding.spTingkat, tingkatList)
-
-        binding.spTingkat.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedTingkat = tingkatList[position]
-                setupPeranSpinner()
-                if (isEditMode && editSkp != null) {
-                    setSpinnerSelection(binding.spTingkat, editSkp?.tingkat)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        binding.spTingkat.isEnabled = tingkatList.size > 1
-        if (isEditMode && editSkp != null) {
-            setSpinnerSelection(binding.spTingkat, editSkp?.tingkat)
-        }
-    }
-
-    private fun setupPeranSpinner() {
-        val peranList = SkpRule.getPeranList(selectedKategori, selectedKegiatan, selectedTingkat)
-        setSpinnerData(binding.spPeran, peranList)
-
-        binding.spPeran.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedPeran = peranList[position]
-                setupModeSpinner()
-                if (isEditMode && editSkp != null) {
-                    setSpinnerSelection(binding.spPeran, editSkp?.peran)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        binding.spPeran.isEnabled = peranList.size > 1
-        if (isEditMode && editSkp != null) {
-            setSpinnerSelection(binding.spPeran, editSkp?.peran)
-        }
-    }
-
-    private fun setupModeSpinner() {
-        val modeList = SkpRule.getModeList(selectedKategori, selectedKegiatan, selectedTingkat, selectedPeran)
-        setSpinnerData(binding.spMode, modeList)
-
-        binding.spMode.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedMode = modeList[position]
-                calculatePointNow()
-                if (isEditMode && editSkp != null) {
-                    setSpinnerSelection(binding.spMode, editSkp?.modeKegiatan)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        binding.spMode.isEnabled = !(modeList.size == 1 && modeList[0] == SkpRule.MODE_TIDAK_ADA)
-        if (isEditMode && editSkp != null) {
-            setSpinnerSelection(binding.spMode, editSkp?.modeKegiatan)
-        }
-        calculatePointNow()
-    }
-
-    private fun calculatePointNow() {
-        selectedPoin = SkpRule.calculatePoint(selectedKategori, selectedKegiatan, selectedTingkat, selectedPeran, selectedMode)
-        binding.tvPoinOtomatis.text = "$selectedPoin Poin"
-    }
-
-    private fun setupClickActions() {
-        binding.btnPilihFile.setOnClickListener { openFilePicker() }
-        binding.btnSimpan.setOnClickListener { validateBeforeSave() }
-        binding.btnBatal.setOnClickListener { finish() }
     }
 
     private fun openFilePicker() {
@@ -196,111 +64,38 @@ class FormSkpActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 101 && resultCode == RESULT_OK && data != null) {
             data.data?.let { uri ->
-                selectedFileUri = uri
-                selectedFileName = getFileName(uri)
-                selectedMimeType = contentResolver.getType(uri) ?: getMimeTypeFromFileName(selectedFileName)
+                val fileName = getFileName(uri)
+                val mimeType = contentResolver.getType(uri) ?: getMimeTypeFromFileName(fileName)
                 
-                if (!isAllowedMimeType(selectedMimeType)) {
-                    selectedFileUri = null
+                if (mimeType !in listOf("image/jpeg", "image/png", "application/pdf")) {
                     Toast.makeText(this, "Format file harus JPG, PNG, atau PDF", Toast.LENGTH_LONG).show()
                     return
                 }
                 
-                if (getFileSize(uri) > 5 * 1024 * 1024) {
-                    selectedFileUri = null
+                val size = getFileSize(uri)
+                if (size > 5 * 1024 * 1024) {
                     Toast.makeText(this, "Ukuran file maksimal 5 MB", Toast.LENGTH_LONG).show()
                     return
                 }
-                binding.tvFileName.text = "File dipilih: $selectedFileName"
+
+                selectedFileUri = uri
+                selectedFileName = fileName
+                selectedMimeType = mimeType
+                fileBytes = readBytesFromUri(uri)
             }
         }
     }
 
-    private fun validateBeforeSave() {
-        if (selectedKategori.isEmpty() || selectedKegiatan.isEmpty() || selectedTingkat.isEmpty() || 
-            selectedPeran.isEmpty() || selectedMode.isEmpty()) {
-            Toast.makeText(this, "Lengkapi semua pilihan terlebih dahulu", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (selectedPoin <= 0) {
-            Toast.makeText(this, "Poin belum valid. Cek pilihan kegiatan.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!isEditMode && selectedFileUri == null) {
-            Toast.makeText(this, "Pilih file bukti terlebih dahulu", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        lifecycleScope.launch {
-            val key = viewModel.userKey.first()
-            viewModel.saveData(
-                context = this@FormSkpActivity,
-                isEditMode = isEditMode,
-                editSkp = editSkp,
-                userKey = key,
-                selectedKategori = selectedKategori,
-                selectedKegiatan = selectedKegiatan,
-                selectedTingkat = selectedTingkat,
-                selectedPeran = selectedPeran,
-                selectedMode = selectedMode,
-                selectedPoin = selectedPoin,
-                fileUri = selectedFileUri,
-                fileName = selectedFileName,
-                mimeType = selectedMimeType,
-                existingData = mapOf(
-                    "url" to (editSkp?.fileUrl ?: ""),
-                    "name" to (editSkp?.fileName ?: ""),
-                    "type" to (editSkp?.fileType ?: ""),
-                    "path" to (editSkp?.storagePath ?: "")
-                )
-            )
-        }
-    }
-
-    private fun observeViewModel() {
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                launch {
-                    viewModel.isLoading.collectLatest { loading ->
-                        setLoading(loading)
-                    }
-                }
-                launch {
-                    viewModel.saveSuccess.collect { message ->
-                        Toast.makeText(this@FormSkpActivity, message, Toast.LENGTH_SHORT).show()
-                        finish()
-                    }
-                }
-                launch {
-                    viewModel.errorMessage.collect { message ->
-                        Toast.makeText(this@FormSkpActivity, message, Toast.LENGTH_LONG).show()
-                    }
-                }
+    private fun readBytesFromUri(uri: Uri): ByteArray? {
+        return contentResolver.openInputStream(uri)?.use { inputStream ->
+            val byteBuffer = ByteArrayOutputStream()
+            val bufferSize = 1024
+            val buffer = ByteArray(bufferSize)
+            var len: Int
+            while (inputStream.read(buffer).also { len = it } != -1) {
+                byteBuffer.write(buffer, 0, len)
             }
-        }
-    }
-
-    private fun setLoading(loading: Boolean) {
-        binding.progressUpload.visibility = if (loading) View.VISIBLE else View.GONE
-        binding.btnSimpan.isEnabled = !loading
-        binding.btnPilihFile.isEnabled = !loading
-        binding.btnBatal.isEnabled = !loading
-    }
-
-    private fun setSpinnerData(spinner: Spinner, data: List<String>) {
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, data)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinner.adapter = adapter
-    }
-
-    private fun setSpinnerSelection(spinner: Spinner, value: String?) {
-        value?.let {
-            for (i in 0 until spinner.count) {
-                if (spinner.getItemAtPosition(i).toString() == it) {
-                    spinner.setSelection(i)
-                    return
-                }
-            }
+            byteBuffer.toByteArray()
         }
     }
 
@@ -325,8 +120,6 @@ class FormSkpActivity : AppCompatActivity() {
         }
         return size
     }
-
-    private fun isAllowedMimeType(mimeType: String) = mimeType in listOf("image/jpeg", "image/png", "application/pdf")
 
     private fun getMimeTypeFromFileName(fileName: String): String {
         val extension = fileName.substringAfterLast('.', "").lowercase()

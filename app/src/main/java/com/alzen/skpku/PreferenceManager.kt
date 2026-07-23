@@ -1,50 +1,76 @@
 package com.alzen.skpku
 
 import android.content.Context
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
+import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
-import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+/**
+ * Manages user preferences and authentication data using EncryptedSharedPreferences.
+ * This provides a secure way to store sensitive information like access tokens.
+ */
+class PreferenceManager(context: Context) {
 
-class PreferenceManager(private val context: Context) {
+    private val masterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    private val sharedPreferences: SharedPreferences = EncryptedSharedPreferences.create(
+        context,
+        "secure_settings",
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    private val _accessTokenFlow = MutableStateFlow(getAccessTokenSync())
+    val accessTokenFlow: Flow<String> = _accessTokenFlow.asStateFlow()
+
+    private val _userIdFlow = MutableStateFlow(getUserIdSync())
+    val userIdFlow: Flow<String> = _userIdFlow.asStateFlow()
+
+    private val _studentNameFlow = MutableStateFlow(getStudentNameSync())
+    val studentNameFlow: Flow<String> = _studentNameFlow.asStateFlow()
 
     companion object {
-        val USER_KEY = stringPreferencesKey("user_key")
-        val STUDENT_NAME = stringPreferencesKey("nama_mahasiswa")
+        private const val KEY_ACCESS_TOKEN = "access_token"
+        private const val KEY_USER_ID = "user_id"
+        private const val KEY_STUDENT_NAME = "nama_mahasiswa"
     }
 
-    val userKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[USER_KEY] ?: ""
-    }
-
-    val studentNameFlow: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[STUDENT_NAME] ?: ""
-    }
-
-    suspend fun saveStudentName(name: String) {
-        context.dataStore.edit { preferences ->
-            preferences[STUDENT_NAME] = name
+    fun saveAuthData(token: String, userId: String) {
+        sharedPreferences.edit().apply {
+            putString(KEY_ACCESS_TOKEN, token)
+            putString(KEY_USER_ID, userId)
+            apply()
         }
+        _accessTokenFlow.value = token
+        _userIdFlow.value = userId
     }
 
-    suspend fun getOrCreateUserKey(): String {
-        var currentKey = ""
-        context.dataStore.edit { preferences ->
-            val key = preferences[USER_KEY]
-            if (key.isNullOrEmpty()) {
-                val newKey = UUID.randomUUID().toString()
-                preferences[USER_KEY] = newKey
-                currentKey = newKey
-            } else {
-                currentKey = key
-            }
+    fun saveStudentName(name: String) {
+        sharedPreferences.edit().putString(KEY_STUDENT_NAME, name).apply()
+        _studentNameFlow.value = name
+    }
+
+    private fun getAccessTokenSync(): String = sharedPreferences.getString(KEY_ACCESS_TOKEN, "") ?: ""
+    
+    private fun getUserIdSync(): String = sharedPreferences.getString(KEY_USER_ID, "") ?: ""
+    
+    private fun getStudentNameSync(): String = sharedPreferences.getString(KEY_STUDENT_NAME, "") ?: ""
+
+    fun getAccessToken(): String = getAccessTokenSync()
+
+    fun clearAuthData() {
+        sharedPreferences.edit().apply {
+            remove(KEY_ACCESS_TOKEN)
+            remove(KEY_USER_ID)
+            apply()
         }
-        return currentKey
+        _accessTokenFlow.value = ""
+        _userIdFlow.value = ""
     }
 }

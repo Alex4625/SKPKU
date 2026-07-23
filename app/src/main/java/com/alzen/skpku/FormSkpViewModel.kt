@@ -1,17 +1,20 @@
 package com.alzen.skpku
 
-import android.content.Context
-import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import javax.inject.Inject
 
-class FormSkpViewModel(
+/**
+ * ViewModel for the SKP Form screen.
+ * Handles validation, quota checking, and saving data.
+ */
+@HiltViewModel
+class FormSkpViewModel @Inject constructor(
     private val repository: SkpRepository,
     private val preferenceManager: PreferenceManager
 ) : ViewModel() {
@@ -25,20 +28,19 @@ class FormSkpViewModel(
     private val _errorMessage = MutableSharedFlow<String>()
     val errorMessage: SharedFlow<String> = _errorMessage.asSharedFlow()
 
-    val userKey: Flow<String> = preferenceManager.userKeyFlow
+    val userId: Flow<String> = preferenceManager.userIdFlow
 
     fun saveData(
-        context: Context,
         isEditMode: Boolean,
         editSkp: Skp?,
-        userKey: String,
+        userId: String,
         selectedKategori: String,
         selectedKegiatan: String,
         selectedTingkat: String,
         selectedPeran: String,
         selectedMode: String,
         selectedPoin: Int,
-        fileUri: Uri?,
+        fileBytes: ByteArray?,
         fileName: String,
         mimeType: String,
         existingData: Map<String, String> // url, name, type, path
@@ -46,10 +48,10 @@ class FormSkpViewModel(
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                // 1. Check Quota
+                // 1. Check Quota via API
                 val quotaLimit = SkpRule.getQuotaLimit(selectedKegiatan, selectedTingkat)
                 if (quotaLimit > 0) {
-                    val response = repository.fetchSkpRecords(userKey)
+                    val response = repository.fetchSkpRecordsFromApi(userId, 1, 100)
                     if (response.isSuccessful) {
                         val records = response.body() ?: emptyList()
                         val count = records.count { skp ->
@@ -75,29 +77,26 @@ class FormSkpViewModel(
                 var finalFileType = existingData["type"] ?: ""
                 var finalStoragePath = existingData["path"] ?: ""
 
-                if (fileUri != null) {
-                    val fileBytes = readBytesFromUri(context, fileUri)
-                    if (fileBytes != null) {
-                        val safeFileName = fileName.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
-                        val storagePath = "${System.currentTimeMillis()}_$safeFileName"
-                        
-                        repository.uploadFile("skp-bukti", storagePath, fileBytes, mimeType)
-                        
-                        finalStoragePath = storagePath
-                        finalFileUrl = repository.getPublicUrl("skp-bukti", storagePath)
-                        finalFileName = fileName
-                        finalFileType = when {
-                            mimeType == "application/pdf" -> "pdf"
-                            mimeType.startsWith("image/") -> "image"
-                            else -> "file"
-                        }
+                if (fileBytes != null) {
+                    val safeFileName = fileName.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
+                    val storagePath = "${System.currentTimeMillis()}_$safeFileName"
+                    
+                    repository.uploadFile("skp-bukti", storagePath, fileBytes, mimeType)
+                    
+                    finalStoragePath = storagePath
+                    finalFileUrl = repository.getPublicUrl("skp-bukti", storagePath)
+                    finalFileName = fileName
+                    finalFileType = when {
+                        mimeType == "application/pdf" -> "pdf"
+                        mimeType.startsWith("image/") -> "image"
+                        else -> "file"
                     }
                 }
 
                 // 3. Save Record
                 val skp = Skp(
                     id = editSkp?.id,
-                    userKey = userKey,
+                    userKey = userId,
                     namaKegiatan = selectedKegiatan,
                     jenisKegiatan = SkpRule.getJenisKegiatan(selectedKategori),
                     kategoriBidang = selectedKategori,
@@ -120,6 +119,8 @@ class FormSkpViewModel(
                 }
 
                 if (saveResponse.isSuccessful) {
+                    // Trigger a refresh of the local database to show new data immediately
+                    repository.refreshSkpRecords(userId)
                     _saveSuccess.emit(if (isEditMode) "Data SKP berhasil diupdate" else "Data SKP berhasil disimpan")
                 } else {
                     _errorMessage.emit("Gagal simpan: ${saveResponse.code()}")
@@ -130,19 +131,6 @@ class FormSkpViewModel(
             } finally {
                 _isLoading.value = false
             }
-        }
-    }
-
-    private fun readBytesFromUri(context: Context, uri: Uri): ByteArray? {
-        return context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            val byteBuffer = ByteArrayOutputStream()
-            val bufferSize = 1024
-            val buffer = ByteArray(bufferSize)
-            var len: Int
-            while (inputStream.read(buffer).also { len = it } != -1) {
-                byteBuffer.write(buffer, 0, len)
-            }
-            byteBuffer.toByteArray()
         }
     }
 

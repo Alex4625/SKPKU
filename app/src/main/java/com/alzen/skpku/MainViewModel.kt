@@ -2,16 +2,26 @@ package com.alzen.skpku
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
-class MainViewModel(
+@HiltViewModel
+class MainViewModel @Inject constructor(
     private val repository: SkpRepository,
     private val preferenceManager: PreferenceManager
 ) : ViewModel() {
 
-    private val _allSkpList = MutableStateFlow<List<Skp>>(emptyList())
-    val allSkpList: StateFlow<List<Skp>> = _allSkpList.asStateFlow()
+    /**
+     * Single source of truth for the SKP list, observing the local Room database.
+     */
+    val allSkpList: StateFlow<List<Skp>> = repository.observeSkpRecords()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -20,35 +30,38 @@ class MainViewModel(
     val errorMessage: SharedFlow<String> = _errorMessage.asSharedFlow()
 
     val studentName: Flow<String> = preferenceManager.studentNameFlow
-    val userKey: Flow<String> = preferenceManager.userKeyFlow
+    val userId: Flow<String> = preferenceManager.userIdFlow
 
-    fun loadData(userKey: String) {
-        if (userKey.isEmpty()) return
+    /**
+     * Refreshes the data from the network.
+     * Following the Offline-First strategy, we trigger a network fetch which
+     * will update the local database, and the UI will reflect changes via [allSkpList].
+     */
+    fun refreshData(userId: String) {
+        if (userId.isEmpty()) return
         
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val response = repository.fetchSkpRecords(userKey)
-                if (response.isSuccessful) {
-                    _allSkpList.value = response.body() ?: emptyList()
-                } else {
-                    _errorMessage.emit("Gagal load data: ${response.code()}")
-                }
+                repository.refreshSkpRecords(userId)
             } catch (e: Exception) {
-                _errorMessage.emit("Terjadi kesalahan: ${e.message}")
+                _errorMessage.emit("Gagal menyegarkan data: ${e.message}")
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
-    suspend fun getOrCreateUserKey(): String {
-        return preferenceManager.getOrCreateUserKey()
-    }
-
     fun saveStudentName(name: String) {
         viewModelScope.launch {
             preferenceManager.saveStudentName(name)
+        }
+    }
+
+    fun logout() {
+        viewModelScope.launch {
+            preferenceManager.clearAuthData()
+            // Token is cleared from PreferenceManager, and the Interceptor will pick up the change.
         }
     }
 }
